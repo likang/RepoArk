@@ -18,7 +18,7 @@ type RootDir struct {
 }
 
 // archiveGitRepo is the main function to create a gzip tar archive of a Git repository
-func archiveGitRepo(repoPath string) error {
+func archiveGitRepo(repoPath string, outputPath string) error {
 	// Validate repository path
 	info, err := os.Stat(repoPath)
 	if err != nil {
@@ -36,8 +36,7 @@ func archiveGitRepo(repoPath string) error {
 	}
 
 	// Create output archive file
-	archiveName := filepath.Base(repoPath) + ".tar.gz"
-	archiveFile, err := os.Create(archiveName)
+	archiveFile, err := os.Create(outputPath)
 	if err != nil {
 		return fmt.Errorf("error creating archive file: %v", err)
 	}
@@ -64,7 +63,7 @@ func archiveGitRepo(repoPath string) error {
 		return err
 	}
 
-	fmt.Printf("Successfully created archive: %s\n", archiveName)
+	fmt.Printf("Successfully created archive: %s\n", outputPath)
 	return nil
 }
 
@@ -168,6 +167,7 @@ func addFileToArchive(tarWriter *tar.Writer, sourcePath, archivePath string) err
 		ModTime: info.ModTime(),
 	}
 
+	fmt.Printf("a %s\n", archivePath)
 	// Write header
 	if err := tarWriter.WriteHeader(header); err != nil {
 		return err
@@ -178,16 +178,61 @@ func addFileToArchive(tarWriter *tar.Writer, sourcePath, archivePath string) err
 	return err
 }
 
+func findAvailableArchiveName(repoPath string) string {
+	baseName := filepath.Base(repoPath)
+	// change to current directory
+	dirName, _ := os.Getwd()
+
+	archiveName := fmt.Sprintf("%s.tar.gz", baseName)
+
+	// Check if the file exists
+	_, err := os.Stat(filepath.Join(dirName, archiveName))
+	if err != nil {
+		// File does not exist, return the path
+		return archiveName
+	}
+
+	i := 1
+	for {
+		archiveName := fmt.Sprintf("%s-%d.tar.gz", baseName, i)
+		_, err := os.Stat(filepath.Join(dirName, archiveName))
+		if err != nil {
+			return archiveName
+		}
+		i++
+	}
+}
+
+
+// print usage information
+func printUsage() {
+	fmt.Println(`Usage:
+repoark <repository-path> [<output-file>]
+repoark restore <repository-path> <archive-file>`)
+}
+
 // main function to handle command-line input
 func main() {
 	// Check for repository path argument
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: git-archiver <repository-path>")
+	argsLen := len(os.Args)
+	if argsLen < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+	if argsLen > 3 {
+		printUsage()
 		os.Exit(1)
 	}
 
 	repoPath := os.Args[1]
-	if err := archiveGitRepo(repoPath); err != nil {
+	var outputFile string
+	if argsLen == 3 {
+		outputFile = os.Args[2]
+	} else {
+		outputFile = findAvailableArchiveName(repoPath)
+	}
+
+	if err := archiveGitRepo(repoPath, outputFile); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
