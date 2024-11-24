@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // RootDir represents a directory to be archived with a prefix
@@ -167,7 +168,7 @@ func addFileToArchive(tarWriter *tar.Writer, sourcePath, archivePath string) err
 		ModTime: info.ModTime(),
 	}
 
-	fmt.Printf("a %s\n", archivePath)
+	fmt.Printf("add %s\n", archivePath)
 	// Write header
 	if err := tarWriter.WriteHeader(header); err != nil {
 		return err
@@ -176,6 +177,85 @@ func addFileToArchive(tarWriter *tar.Writer, sourcePath, archivePath string) err
 	// Copy file contents
 	_, err = io.Copy(tarWriter, file)
 	return err
+}
+
+// restoreGitRepo restores a Git repository from a gzip tar archive
+func restoreGitRepo(repoPath, archiveName string) error {
+    // Open the archive file
+    archiveFile, err := os.Open(archiveName)
+    if err != nil {
+    return fmt.Errorf("error opening archive file: %v", err)
+    }
+    defer archiveFile.Close()
+
+    // Create gzip reader
+    gzReader, err := gzip.NewReader(archiveFile)
+    if err != nil {
+        return fmt.Errorf("error creating gzip reader: %v", err)
+    }
+    defer gzReader.Close()
+
+    // Create tar reader
+    tarReader := tar.NewReader(gzReader)
+
+    // Ensure the repository directory exists
+    if err := os.MkdirAll(repoPath, 0755); err != nil {
+        return fmt.Errorf("error creating repository directory: %v", err)
+    }
+
+    // Extract files from the archive
+    for {
+        header, err := tarReader.Next()
+        if err == io.EOF {
+            break // End of archive
+        }
+        if err != nil {
+            return fmt.Errorf("error reading next file from archive: %v", err)
+        }
+
+        // Create the file or directory
+        targetPath := filepath.Join(repoPath, header.Name)
+        switch header.Typeflag {
+        case tar.TypeDir:
+            if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
+                return fmt.Errorf("error creating directory: %v", err)
+            }
+        case tar.TypeReg:
+			// check localfile first, if exist, and ModTime is the same with header.ModeTime, skip
+			if _, err := os.Stat(targetPath); err == nil {
+				stat, _ := os.Stat(targetPath)
+				if stat.ModTime().Round(time.Second) == header.ModTime.Round(time.Second) {
+					fmt.Printf("skip %s\n", targetPath)
+					continue
+				}
+			}
+			// Ensure the directory exists
+			dir := filepath.Dir(targetPath)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return fmt.Errorf("error creating directory: %v", err)
+			}
+            file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode))
+            if err != nil {
+                return fmt.Errorf("error creating file: %v", err)
+            }
+            defer file.Close()
+
+			fmt.Printf("restore %s\n", targetPath)
+
+            if _, err := io.Copy(file, tarReader); err != nil {
+                return fmt.Errorf("error writing file content: %v", err)
+            }
+			// restore header.ModTime
+			if err := os.Chtimes(targetPath, header.ModTime, header.ModTime); err != nil {
+				return fmt.Errorf("error setting file modification time: %v", err)
+			}
+        default:
+            return fmt.Errorf("unsupported file type: %v", header.Typeflag)
+        }
+    }
+
+    fmt.Printf("Successfully restored repository to: %s\n", repoPath)
+    return nil
 }
 
 func findAvailableArchiveName(repoPath string) string {
@@ -219,6 +299,19 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+
+	if os.Args[1] == "restore" {
+		if argsLen != 4 {
+			printUsage()
+			os.Exit(1)
+		}
+		if err := restoreGitRepo(os.Args[2], os.Args[3]); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if argsLen > 3 {
 		printUsage()
 		os.Exit(1)

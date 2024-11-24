@@ -43,9 +43,23 @@ go install github.com/likang/RepoArk@latest
 
 ## Usage
 
+
+### Archive a Repository
+
 ```bash
-./repoark /path/to/your/git/repository
+repoark /path/to/your/git/repository [output-file]
 ```
+
+- /path/to/your/git/repository: Path to the Git repository you want to archive.
+- [output-file]: Optional. The name of the output archive file. If not provided, a unique name will be generated.
+
+### Restore a Repository
+```bash
+repoark restore /path/to/your/git/repository /path/to/your/archive.tar.gz
+```
+
+- /path/to/your/git/repository: Path to the directory where you want to restore the repository.
+- /path/to/your/archive.tar.gz: Path to the archive file you want to restore.
 
 
 ## Contributing
