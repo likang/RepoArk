@@ -1,11 +1,12 @@
 ## RepoArk
-A robust Go command-line tool for archiving Git repositories, including both tracked and untracked files (respecting .gitignore).
-
+A robust Go command-line tool for archiving and restoring Git repositories, including both tracked and untracked files (respecting .gitignore).
 
 ## Features
 
-Basiclly it does the same thing as the following shell script:
+Basically it does the same thing as the following shell script:
 
+
+### Archive
 
 ```bash
 { git ls-files --others --exclude-standard --cached && find .git -type f; } | \
@@ -13,11 +14,22 @@ sort -u | \
 tar --exclude "$(basename $(pwd)).tar.gz" -czvf "$(basename $(pwd)).tar.gz" -T -
 ```
 
-add some features to overcome the limitations of shell script:
+### Restore
+
+```bash
+tar -xzvf "$(basename $(pwd)).tar.gz" -C /path/to/your/git/repository
+```
+
+
+Additional features to overcome the limitations of shell script:
 
 - Support submodule
 - Cross-platform native program
 - Archive from any directory path
+- Smart restore with file modification time check
+- Skip unchanged files during restore
+- Auto cleanup for removed files during restore
+- Handle file permission issues during restore
 
 
 ## Installation

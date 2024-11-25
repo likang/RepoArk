@@ -123,7 +123,7 @@ func addEntry(tarWriter *tar.Writer, dirList []RootDir) error {
 
 	// Add .git directory contents
 	gitDir := filepath.Join(rootDir.Dir, ".git")
-	if err := filepath.Walk(gitDir, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.WalkDir(gitDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -135,7 +135,7 @@ func addEntry(tarWriter *tar.Writer, dirList []RootDir) error {
 		}
 		archivePath := filepath.Join(rootDir.Prefix, relativePath)
 
-		if !info.IsDir() {
+		if !d.IsDir() {
 			return addFileToArchive(tarWriter, path, archivePath)
 		}
 		return nil
@@ -203,6 +203,9 @@ func restoreGitRepo(repoPath, archiveName string) error {
         return fmt.Errorf("error creating repository directory: %v", err)
     }
 
+    // Create a set to store unique extracted file paths
+    extractedPaths := make(map[string]interface{})
+
     // Extract files from the archive
     for {
         header, err := tarReader.Next()
@@ -213,49 +216,121 @@ func restoreGitRepo(repoPath, archiveName string) error {
             return fmt.Errorf("error reading next file from archive: %v", err)
         }
 
-        // Create the file or directory
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+
         targetPath := filepath.Join(repoPath, header.Name)
-        switch header.Typeflag {
-        case tar.TypeDir:
-            if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
-                return fmt.Errorf("error creating directory: %v", err)
-            }
-        case tar.TypeReg:
-			// check localfile first, if exist, and ModTime is the same with header.ModeTime, skip
-			if _, err := os.Stat(targetPath); err == nil {
-				stat, _ := os.Stat(targetPath)
-				if stat.ModTime().Round(time.Second) == header.ModTime.Round(time.Second) {
-					fmt.Printf("skip %s\n", targetPath)
-					continue
-				}
-			}
-			// Ensure the directory exists
-			dir := filepath.Dir(targetPath)
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return fmt.Errorf("error creating directory: %v", err)
-			}
-            file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode))
-            if err != nil {
-                return fmt.Errorf("error creating file: %v", err)
-            }
-            defer file.Close()
 
-			fmt.Printf("restore %s\n", targetPath)
-
-            if _, err := io.Copy(file, tarReader); err != nil {
-                return fmt.Errorf("error writing file content: %v", err)
-            }
-			// restore header.ModTime
-			if err := os.Chtimes(targetPath, header.ModTime, header.ModTime); err != nil {
-				return fmt.Errorf("error setting file modification time: %v", err)
+		// check localfile first, if exist, and ModTime is the same with header.ModeTime, skip
+		if stat, err := os.Stat(targetPath); err == nil {
+			if stat.ModTime().Round(time.Second) == header.ModTime.Round(time.Second) && (stat.IsDir() == (header.Typeflag == tar.TypeDir)) {
+				fmt.Printf("skip %s\n", targetPath)
+				continue
 			}
-        default:
-            return fmt.Errorf("unsupported file type: %v", header.Typeflag)
-        }
+
+			// Try to remove first
+			if err := removeExistingPath(targetPath); err != nil {
+				return err
+			}
+		}
+		
+		if err := extractFile(targetPath, header, tarReader); err != nil {
+			return err
+		}
+		extractedPaths[targetPath] = nil
+		// restore file permission
+		if err := os.Chmod(targetPath, os.FileMode(header.Mode)); err != nil {
+			return fmt.Errorf("error setting file permission: %v", err)
+		}
+		// restore header.ModTime
+		if err := os.Chtimes(targetPath, header.ModTime, header.ModTime); err != nil {
+			return fmt.Errorf("error setting file modification time: %v", err)
+		}
     }
+
+    // Walk through repoPath to find and remove files not in extractedPaths
+    if err := filepath.WalkDir(repoPath, func(path string, d os.DirEntry, err error) error {
+        if err != nil {
+            return err
+        }
+
+		relativePath, err := filepath.Rel(repoPath, path)
+		if err != nil {
+			return err
+		}
+
+		// Skip the repository root
+		if relativePath == "." {
+			return nil
+		}
+
+		if d.IsDir() {
+			os.Remove(path) // remove empty directory
+			return nil
+		}
+
+        // Skip files that were just extracted
+        if _, exists := extractedPaths[relativePath]; exists {
+            return nil
+        }
+        // Remove files that weren't in the archive
+        return removeExistingPath(path)
+    }); err != nil {
+		return fmt.Errorf("error cleaning up repository: %v", err)
+	}
 
     fmt.Printf("Successfully restored repository to: %s\n", repoPath)
     return nil
+}
+
+// remove existing file
+func removeExistingPath(targetPath string) (error) {
+	err := os.RemoveAll(targetPath)
+	if err != nil {
+		removed := false
+		// If removal failed, try changing permissions and remove again
+		if os.IsPermission(err) {
+			// Add write permission to all user bits
+			if err := os.Chmod(targetPath, 0666); err == nil {
+				// Try removal again after permission change
+				err = os.RemoveAll(targetPath)
+				removed = err == nil
+			}
+		}
+		if !removed {
+			return fmt.Errorf("error removing existing file: %v", err)
+		}
+	}
+	return nil
+}
+
+func extractFile(targetPath string, header *tar.Header, tarReader *tar.Reader) (error) {
+	// Ensure the directory exists
+	dir := filepath.Dir(targetPath)
+	// Check if directory exists and is a file
+	if info, err := os.Stat(dir); err == nil && !info.IsDir() {
+		if err := removeExistingPath(dir); err != nil {
+			return fmt.Errorf("error removing existing file at directory path: %v", err)
+		}
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("error creating directory: %v", err)
+	}
+
+	file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode))
+	if err != nil {
+		return fmt.Errorf("error creating file: %v", err)
+	}
+	defer file.Close()
+
+	fmt.Printf("restore %s\n", targetPath)
+
+	if _, err := io.Copy(file, tarReader); err != nil {
+		return fmt.Errorf("error writing file content: %v", err)
+	}
+	return nil
 }
 
 func findAvailableArchiveName(repoPath string) string {
