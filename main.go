@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -87,8 +88,9 @@ func addEntry(tarWriter *tar.Writer, dirList []RootDir) error {
 	}
 
 	// Process each file/directory
-	files := strings.Split(string(output), "\n")
-	for _, entry := range files {
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		entry := scanner.Text()
 		if entry == "" {
 			continue
 		}
@@ -220,8 +222,8 @@ func restoreGitRepo(repoPath, archiveName string) error {
 			continue
 		}
 
+		extractedPaths[header.Name] = nil // notice header.Name is relative path and always use slash as separator
         targetPath := filepath.Join(repoPath, header.Name)
-
 		// check localfile first, if exist, and ModTime is the same with header.ModeTime, skip
 		if stat, err := os.Stat(targetPath); err == nil {
 			if stat.ModTime().Round(time.Second) == header.ModTime.Round(time.Second) && (stat.IsDir() == (header.Typeflag == tar.TypeDir)) {
@@ -238,7 +240,6 @@ func restoreGitRepo(repoPath, archiveName string) error {
 		if err := extractFile(targetPath, header, tarReader); err != nil {
 			return err
 		}
-		extractedPaths[targetPath] = nil
 		// restore file permission
 		if err := os.Chmod(targetPath, os.FileMode(header.Mode)); err != nil {
 			return fmt.Errorf("error setting file permission: %v", err)
@@ -249,36 +250,29 @@ func restoreGitRepo(repoPath, archiveName string) error {
 		}
     }
 
-    // Walk through repoPath to find and remove files not in extractedPaths
-    if err := filepath.WalkDir(repoPath, func(path string, d os.DirEntry, err error) error {
-        if err != nil {
-            return err
-        }
-
-		relativePath, err := filepath.Rel(repoPath, path)
-		if err != nil {
-			return err
-		}
-
-		// Skip the repository root
-		if relativePath == "." {
-			return nil
-		}
-
-		if d.IsDir() {
-			os.Remove(path) // remove empty directory
-			return nil
-		}
-
-        // Skip files that were just extracted
-        if _, exists := extractedPaths[relativePath]; exists {
-            return nil
-        }
-        // Remove files that weren't in the archive
-        return removeExistingPath(path)
-    }); err != nil {
-		return fmt.Errorf("error cleaning up repository: %v", err)
+	// list untracked files and remove items not in extractedPaths
+	cmd := exec.Command("git", "-C", repoPath, "ls-files", "--others", "--exclude-standard")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("error listing files in %s: %v", repoPath, err)
 	}
+
+	// Process each file/directory
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		entry := scanner.Text() // entry is relative path and always use slash as separator
+		if entry == "" {
+			continue
+		}
+        // Skip files that were just extracted
+        if _, exists := extractedPaths[entry]; exists {
+			continue
+        }
+		targetPath := filepath.Join(repoPath, entry)
+		fmt.Printf("remove %s\n", targetPath)
+        removeExistingPath(targetPath)
+	}
+
 
     fmt.Printf("Successfully restored repository to: %s\n", repoPath)
     return nil

@@ -17,19 +17,18 @@ tar --exclude "$(basename $(pwd)).tar.gz" -czvf "$(basename $(pwd)).tar.gz" -T -
 ### Restore
 
 ```bash
-tar -xzvf "$(basename $(pwd)).tar.gz" -C /path/to/your/git/repository
+tar -xzvf /path/to/repo.tar.gz -C /path/to/your/repo
 ```
 
 
 Additional features to overcome the limitations of shell script:
 
-- Support submodule
+- Support Git submodules
 - Cross-platform native program
-- Archive from any directory path
-- Smart restore with file modification time check
-- Skip unchanged files during restore
-- Auto cleanup for removed files during restore
-- Handle file permission issues during restore
+- Run command from any directory path
+- Auto cleanup redundant files after restore
+- Skip unchanged files during restore (by checking file modification time)
+- Handle file permission issues during restore (files with permission 444 in .git/objects)
 
 
 ## Installation
