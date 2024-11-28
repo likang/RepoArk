@@ -374,7 +374,7 @@ func main() {
 			printUsage()
 			os.Exit(1)
 		}
-		if err := restoreGitRepo(os.Args[2], os.Args[3]); err != nil {
+		if err := restoreGitRepo(os.Args[3], os.Args[2]); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
 		}
